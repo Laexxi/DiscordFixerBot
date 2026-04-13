@@ -5,62 +5,67 @@ async function createTeamInfrastructure(interaction, { teamName, fixer, runnerId
     const guild = interaction.guild;
     const config = rulesets[rulesetKey];
 
-    // 1. Rolle erstellen
+    // 1. Rolle erstellen (Warning Fix: Nutze Hex-Zahl oder String ohne # falls nötig)
     const teamRole = await guild.roles.create({
         name: `Team ${teamName}`,
-        color: config.color,
-        reason: `Neues ${config.name} Team erstellt durch ${interaction.user.tag}`
+        color: config.color, // Falls die Warnung bleibt, versuche es ohne das '#' davor
+        reason: `Runner-Team Setup`
     });
 
-    // 2. Kategorie erstellen
+    // 2. Kategorie erstellen (Privat für alle außer Fixer & Team)
     const category = await guild.channels.create({
         name: `📂 TEAM: ${teamName}`,
         type: ChannelType.GuildCategory,
         permissionOverwrites: [
-            { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-            { id: teamRole.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.Connect] },
+            { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] }, // @everyone sieht nichts
+            { id: teamRole.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
             { id: fixer.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] }
         ]
     });
 
-    // 3. Rollen an Fixer und Runner vergeben
+    // 3. Rollen vergeben
     const allMembers = [...new Set([fixer.id, ...runnerIds])];
     for (const id of allMembers) {
         try {
             const member = await guild.members.fetch(id);
             await member.roles.add(teamRole);
-        } catch (e) { console.error(`Konnte Rolle nicht an ${id} vergeben.`); }
+        } catch (e) { console.error(`Rollen-Error für ${id}`); }
     }
 
-    // 4. Kanäle erstellen
-    for (const channelName of config.defaultChannels) {
-        const isVoice = channelName === "Mission-Control"; // Beispiel für Voice-Logik
-        
+    // 4. Kanäle aus dem Ruleset erstellen
+    for (const chanConfig of config.channels) {
+        let type = ChannelType.GuildText;
+        if (chanConfig.type === "voice") type = ChannelType.GuildVoice;
+        if (chanConfig.type === "forum") type = ChannelType.GuildForum;
+
         const channel = await guild.channels.create({
-            name: channelName,
-            type: isVoice ? ChannelType.GuildVoice : ChannelType.GuildText,
+            name: chanConfig.name,
+            type: type,
             parent: category.id,
+            topic: chanConfig.topic || ""
         });
 
-        // Spezial-Berechtigungen für bestimmte Kanäle
-        if (channelName === "notizen") {
+        // SPEZIAL-RECHTE: fixer-notes / notizen
+        if (chanConfig.name === "notizen" || chanConfig.name === "fixer-notes") {
+            // Team-Rolle explizit aussperren (auch wenn sie in der Kategorie erlaubt ist)
             await channel.permissionOverwrites.edit(teamRole.id, { ViewChannel: false });
-        }
-        if (channelName === "wichtige-kontakte") {
-            await channel.permissionOverwrites.edit(teamRole.id, { SendMessages: false });
+            // Fixer explizit erlauben
+            await channel.permissionOverwrites.edit(fixer.id, { ViewChannel: true });
         }
     }
 
-    // 5. Private Kanäle für jeden Runner
+    // 5. Private Kanäle (Nur Fixer + der jeweilige Spieler)
     for (const id of runnerIds) {
         const member = await guild.members.fetch(id);
-        const pChan = await guild.channels.create({
+        await guild.channels.create({
             name: `privat-${member.user.username}`,
             type: ChannelType.GuildText,
             parent: category.id,
             permissionOverwrites: [
-                { id: teamRole.id, deny: [PermissionFlagsBits.ViewChannel] },
-                { id: id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
+                { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] }, // @everyone weg
+                { id: teamRole.id, deny: [PermissionFlagsBits.ViewChannel] }, // Restliches Team weg
+                { id: fixer.id, allow: [PermissionFlagsBits.ViewChannel] }, // Fixer darf rein
+                { id: id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] } // Spieler darf rein
             ]
         });
     }
